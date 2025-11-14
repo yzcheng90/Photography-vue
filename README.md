@@ -4,6 +4,18 @@
 
 Photography-vue 是一个基于 Vue 3 开发的个人摄影作品展示网站。该项目旨在为摄影师提供一个优雅、现代的平台，用于展示和分享高质量的摄影作品。网站采用瀑布流布局展示照片，支持照片详情查看、EXIF信息展示、响应式设计等功能，为用户提供流畅的浏览体验。
 
+## 项目效果
+
+以下是项目的效果截图：
+
+### 首页展示
+
+![首页效果](https://raw.githubusercontent.com/yzcheng90/Photography-vue/main/pic/ScreenShot_2025-11-14_162147_529.png)
+
+### 照片详情页
+
+![详情页效果](https://raw.githubusercontent.com/yzcheng90/Photography-vue/main/pic/ScreenShot_2025-11-14_162257_469.png)
+
 ## 技术栈
 
 - **前端框架**: Vue 3.5+<br>
@@ -143,4 +155,4 @@ npm run preview
 如有任何问题或建议，请通过以下方式联系项目维护者：
 
 - 邮箱: [作者邮箱](mailto:yzcheng90@qq.com)
-- GitHub: [[GitHub 仓库地址](https://github.com/yzcheng90)]
+- GitHub: [https://github.com/yzcheng90/Photography-vue](https://github.com/yzcheng90/Photography-vue)
