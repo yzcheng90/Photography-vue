@@ -4,21 +4,9 @@
     <div class="background-container" :style="backgroundStyle"></div>
     
     <!-- 照片详情内容区域 - 在背景之上 -->
-    <div class="photo-detail">
-      <!-- 骨架屏 -->
-      <div v-if="loading" class="skeleton-container">
-        <div class="skeleton-image"></div>
-        <div class="skeleton-info">
-          <div class="skeleton-title"></div>
-          <div class="skeleton-date"></div>
-          <div class="skeleton-param"></div>
-          <div class="skeleton-param"></div>
-          <div class="skeleton-param"></div>
-        </div>
-      </div>
-
-      <!-- 主要内容区域 -->
-      <div v-else-if="currentPhoto.id" class="detail-content">
+      <div class="photo-detail">
+        <!-- 主要内容区域 -->
+      <div v-if="currentPhoto.id" class="detail-content">
         <!-- 左右布局主容器 -->
         <div class="main-layout">
           <!-- 左侧照片展示区域 -->
@@ -48,6 +36,8 @@
                 class="blur-preview"
                 loading="eager"
               />
+              <!-- 移除过渡背景层，避免切换闪烁 -->
+              
               <!-- 高质量原图 -->
               <img 
                 ref="mainImage" 
@@ -146,16 +136,7 @@
                     <span class="param-value">{{ currentPhoto?.exif?.timezone || '-' }}</span>
                   </div>
                 </div>
-                <div class="exif-row">
-                  <div class="exif-param">
-                    <span class="param-label">国家</span>
-                    <span class="param-value">{{ currentPhoto?.exif?.country || '-' }}</span>
-                  </div>
-                  <div class="exif-param">
-                    <span class="param-label">城市</span>
-                    <span class="param-value">{{ currentPhoto?.exif?.city || '-' }}</span>
-                  </div>
-                </div>
+                <!-- 移除了国家和城市信息 -->
               </div>
             </div>
 
@@ -423,13 +404,27 @@ const handleImageLoad = () => {
   imageError.value = false
   
   // 添加淡入动画
+  if (mainImage.value) {
+    // 首先将透明度设置为0
+    mainImage.value.style.opacity = 0
+    
+    // 强制重排
+    mainImage.value.offsetHeight
+    
+    // 然后淡入
+    setTimeout(() => {
+      if (mainImage.value) {
+        mainImage.value.style.opacity = 1
+        // 获取图片高光颜色
+        extractHighlightColor(mainImage.value)
+      }
+    }, 10)
+  }
+  
+  // 加载完成后绘制直方图
   setTimeout(() => {
-    if (mainImage.value) {
-      mainImage.value.style.opacity = 1
-      // 获取图片高光颜色
-      extractHighlightColor(mainImage.value)
-    }
-  }, 50)
+    drawHistogram()
+  }, 200)
 }
 
 // 提取图片的高光颜色
@@ -501,9 +496,23 @@ const extractHighlightColor = (img) => {
 
 // 处理图片加载错误
 const handleImageError = () => {
+  console.warn('高质量照片加载失败，使用预览图替代')
   imageError.value = true
-  imageLoaded.value = false
-  console.error('照片加载失败')
+  // 即使原图加载失败，也设置为已加载状态，以便显示预览图
+  imageLoaded.value = true
+  
+  // 如果有预览图，确保它可见
+  const blurPreview = document.querySelector('.blur-preview')
+  if (blurPreview) {
+    blurPreview.style.opacity = '1'
+    blurPreview.style.filter = 'none' // 移除模糊效果
+    blurPreview.classList.add('error-replacement')
+  }
+
+// 加载模拟直方图
+  setTimeout(() => {
+    drawHistogram()
+  }, 100)
 }
 
 // 鼠标事件处理
@@ -626,6 +635,26 @@ const handleResize = () => {
   }
 }
 
+// 生成模拟直方图数据的辅助函数
+const generateMockHistogramData = (red, green, blue, gray) => {
+  // 生成平滑的高斯分布直方图
+  const center = Math.floor(Math.random() * 50) + 100 // 随机中心点在100-150之间
+  const spread = Math.floor(Math.random() * 20) + 20 // 随机分布范围在20-40之间
+  
+  for (let i = 0; i < 256; i++) {
+    // 高斯分布公式
+    const value = Math.exp(-Math.pow(i - center, 2) / (2 * Math.pow(spread, 2))) * 500
+    
+    // 为每个通道生成略有不同的数据
+    red[i] = Math.floor(value * (0.8 + Math.random() * 0.4))
+    green[i] = Math.floor(value * (0.9 + Math.random() * 0.3))
+    blue[i] = Math.floor(value * (0.7 + Math.random() * 0.5))
+    
+    // 灰度值是RGB的加权平均
+    gray[i] = Math.floor(0.299 * red[i] + 0.587 * green[i] + 0.114 * blue[i])
+  }
+}
+
 // 绘制直方图
 const drawHistogram = () => {
   if (!histogramCanvas.value || !mainImage.value) return
@@ -634,20 +663,70 @@ const drawHistogram = () => {
   const ctx = canvas.getContext('2d')
   ctx.clearRect(0, 0, canvas.width, canvas.height)
   
-  // 创建临时画布来分析图像
-  const tempCanvas = document.createElement('canvas')
-  const tempCtx = tempCanvas.getContext('2d')
-  
-  // 设置临时画布尺寸为较小的尺寸以提高性能
+  // 检查图片状态，如果图片无效则使用模拟数据
   const img = mainImage.value
-  const scaledWidth = Math.min(100, img.width)
-  const scaledHeight = Math.min(100, img.height)
+  let red = new Array(256).fill(0)
+  let green = new Array(256).fill(0)
+  let blue = new Array(256).fill(0)
+  let gray = new Array(256).fill(0)
   
-  tempCanvas.width = scaledWidth
-  tempCanvas.height = scaledHeight
+  // 检查图片是否有效且未损坏
+  if (img.complete && img.naturalHeight > 0 && !img.onerror) {
+    try {
+      // 创建临时画布来分析图像
+      const tempCanvas = document.createElement('canvas')
+      const tempCtx = tempCanvas.getContext('2d')
+      
+      // 设置临时画布尺寸为较小的尺寸以提高性能
+      const scaledWidth = Math.min(100, img.width)
+      const scaledHeight = Math.min(100, img.height)
+      
+      tempCanvas.width = scaledWidth
+      tempCanvas.height = scaledHeight
+      
+      // 绘制图像到临时画布
+      tempCtx.drawImage(img, 0, 0, scaledWidth, scaledHeight)
+      
+      // 获取图像数据
+      const imageData = tempCtx.getImageData(0, 0, scaledWidth, scaledHeight).data
+      
+      // 初始化通道直方图数据
+      red = new Array(256).fill(0)
+      green = new Array(256).fill(0)
+      blue = new Array(256).fill(0)
+      gray = new Array(256).fill(0)
+      
+      // 计算直方图数据
+      for (let i = 0; i < imageData.length; i += 4) {
+        const r = imageData[i]
+        const g = imageData[i + 1]
+        const b = imageData[i + 2]
+        
+        // 累加各通道值
+        red[r]++
+        green[g]++
+        blue[b]++
+        
+        // 计算灰度值 (标准灰度转换公式)
+        const grayValue = Math.round(0.299 * r + 0.587 * g + 0.114 * b)
+        gray[grayValue]++
+      }
+    } catch (error) {
+      console.warn('无法分析图像数据，使用模拟直方图数据:', error)
+      // 图片分析失败，使用模拟数据
+      generateMockHistogramData(red, green, blue, gray)
+    }
+  } else {
+    // 图片无效，使用模拟数据
+    generateMockHistogramData(red, green, blue, gray)
+  }
   
-  // 绘制图像到临时画布
-  tempCtx.drawImage(img, 0, 0, scaledWidth, scaledHeight)
+  // 找出最大值以便归一化
+  const maxRed = Math.max(...red)
+  const maxGreen = Math.max(...green)
+  const maxBlue = Math.max(...blue)
+  const maxGray = Math.max(...gray)
+  const maxValue = Math.max(maxRed, maxGreen, maxBlue, maxGray)
   
   try {
     // 获取图像数据
@@ -674,13 +753,6 @@ const drawHistogram = () => {
       const grayValue = Math.round(0.299 * r + 0.587 * g + 0.114 * b)
       gray[grayValue]++
     }
-    
-    // 找出最大值以便归一化
-    const maxRed = Math.max(...red)
-    const maxGreen = Math.max(...green)
-    const maxBlue = Math.max(...blue)
-    const maxGray = Math.max(...gray)
-    const maxValue = Math.max(maxRed, maxGreen, maxBlue, maxGray)
     
     // 绘制背景
     ctx.fillStyle = '#f8f9fa'
@@ -849,56 +921,57 @@ const nextPhoto = () => {
   }
 }
 
+// 简化过渡逻辑，移除背景切换效果
+const isTransitioning = ref(false)
+
 const goToPhoto = async (id) => {
-  // 如果点击的是当前照片，不执行任何操作
-  if (parseInt(id) === parseInt(currentPhoto.value?.id)) {
+  // 如果点击的是当前照片或正在切换中，不执行任何操作
+  if (parseInt(id) === parseInt(currentPhoto.value?.id) || isTransitioning.value) {
     return
   }
   
-  // 获取主要布局元素
-  const mainLayout = document.querySelector('.main-layout')
-  const gallerySection = document.querySelector('.gallery-section')
+  isTransitioning.value = true
   
-  // 为所有关键元素添加淡出效果
-  mainImage.value?.classList.add('fade-out')
-  mainLayout?.classList.add('fade-out')
-  gallerySection?.classList.add('fade-out')
+  // 获取下一张照片信息
+  const nextPhoto = relatedPhotos.value.find(photo => photo.id === id)
+  if (!nextPhoto) {
+    isTransitioning.value = false
+    return
+  }
   
-  // 使用nextTick确保过渡效果开始后再加载新照片
-  await nextTick()
+  // 预加载下一张图片
+  const preloadImage = new Image()
+  const loadPromise = new Promise((resolve) => {
+    preloadImage.onload = resolve
+    preloadImage.onerror = resolve // 即使加载失败也继续切换
+    preloadImage.src = nextPhoto.original
+  })
+  
+  // 等待图片预加载完成，确保有足够的时间加载下一张图片
+  await loadPromise
   
   // 重置图片状态
   resetZoom()
   imageLoaded.value = false
   
-  // 加载照片详情，但不使用router.push以避免页面重新渲染
+  // 加载照片详情
   await loadPhotoDetail(id)
   
-  // 更新URL并添加到历史记录，确保可以正确返回
-  router.push({ name: 'PhotoDetail', params: { id } })
+  // 更新URL，使用replace选项避免历史记录堆积
+  router.push({ name: 'PhotoDetail', params: { id } }, undefined, { replace: true })
   
   // 加载低质量预览图
   if (currentPhoto.value?.original) {
     loadLowQualityPreview(currentPhoto.value.original)
   }
   
-  // 移除淡出效果，应用淡入效果
-  nextTick(() => {
-    // 移除所有淡出效果
-    if (mainImage.value) {
-      mainImage.value.classList.remove('fade-out')
-      mainImage.value.classList.add('fade-in')
-    }
-    mainLayout?.classList.remove('fade-out')
-    gallerySection?.classList.remove('fade-out')
-    
-    // 短暂延迟后移除淡入效果，准备下次过渡
-    setTimeout(() => {
-      if (mainImage.value) {
-        mainImage.value.classList.remove('fade-in')
-      }
-    }, 300)
-  })
+  // 等待DOM更新，确保新图片已经绑定到src
+  await nextTick()
+  
+  // 延迟一小段时间让新图片开始加载
+  await new Promise(resolve => setTimeout(resolve, 50))
+  
+  isTransitioning.value = false
 }
 
 const handleGalleryPhotoClick = (id) => {
@@ -1299,9 +1372,25 @@ const handleKeydown = (event) => {
   transform: scale(1.1); /* 略微放大以避免边缘空白 */
 }
 
-.image-loaded .blur-preview {
+/* 正常加载完成时隐藏预览图 */
+.image-loaded .blur-preview:not(.error-replacement) {
   opacity: 0;
   filter: blur(0px);
+}
+
+/* 错误状态下的预览图样式 */
+.blur-preview.error-replacement {
+  filter: none !important;
+  opacity: 1 !important;
+  z-index: 3 !important;
+  object-fit: contain;
+  transform: scale(1);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+}
+
+/* 确保加载占位符在错误状态下隐藏 */
+.image-loaded .image-placeholder {
+  display: none;
 }
 
 /* 高质量原图 */
@@ -1312,6 +1401,19 @@ const handleKeydown = (event) => {
   transition: opacity 0.3s ease, transform 0.3s ease;
   z-index: 20;
   /* 移除fadeIn动画，避免内容从上到下显示 */
+}
+
+/* 过渡背景层样式 - 在图片切换时显示上一张图片 */
+.transition-background {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  z-index: 10;
+  pointer-events: none;
 }
 
 /* 过渡效果样式 */

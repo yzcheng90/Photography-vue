@@ -35,11 +35,22 @@
           </div>
         </div>
         <div class="item-info"
-             v-if="showInfoOnHover"
-        >
-          <h3 class="item-title">{{ item.title }}</h3>
-          <p class="item-date">{{ formatDate(item.date) }}</p>
-        </div>
+               v-if="showInfoOnHover"
+          >
+            <h3 class="item-title">{{ item.title }}</h3>
+            <p class="item-date">{{ formatDate(item.date) }}</p>
+            <div v-if="item.exif" class="item-exif-preview">
+              <div class="exif-preview-row">
+                <span class="exif-preview-item">{{ item.exif?.camera || '-' }}</span>
+              </div>
+              <div class="exif-preview-row">
+                <span class="exif-preview-item">{{ item.exif?.aperture || '-' }}</span>
+                <span class="exif-preview-item">{{ item.exif?.shutter || '-' }}</span>
+                <span class="exif-preview-item">ISO {{ item.exif?.iso || '-' }}</span>
+                <span class="exif-preview-item">{{ item.exif?.focalLength || '-' }}</span>
+              </div>
+            </div>
+          </div>
       </div>
     </div>
     <!-- 空状态提示 -->
@@ -526,10 +537,55 @@ onMounted(() => {
 }
 
 .item-date {
-  margin: 0;
+  margin: 0 0 8px 0;
   font-size: 13px;
   opacity: 0.9;
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+/* EXIF信息预览样式 */
+.item-exif-preview {
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.85;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+}
+
+.exif-preview-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.exif-preview-row:last-child {
+  margin-bottom: 0;
+}
+
+.exif-preview-item {
+  white-space: nowrap;
+  color: var(--text-primary) !important;
+}
+
+/* 响应式调整 */
+@media (max-width: 768px) {
+  .exif-preview-row {
+    gap: 8px;
+  }
+  
+  .item-exif-preview {
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 480px) {
+  .exif-preview-row {
+    gap: 6px;
+  }
+  
+  .exif-preview-item {
+    font-size: 10px;
+  }
 }
 
 /* 空状态样式 */

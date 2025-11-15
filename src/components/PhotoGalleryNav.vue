@@ -63,7 +63,6 @@ const emit = defineEmits(['photo-click'])
 // 处理照片点击
 const onPhotoClick = (photoId) => {
   emit('photo-click', photoId)
-  // 点击后滚动到该照片（通过watch会自动触发scrollToCurrentPhoto）
 }
 
 // Refs
@@ -75,9 +74,25 @@ const touchStartX = ref(0)
 const touchStartTime = ref(0)
 const touchStarted = ref(false)
 
+// 缓存DOM元素
+const cachedThumbnails = ref(new Map())
+
+// 节流函数
+const throttle = (func, limit) => {
+  let inThrottle
+  return function() {
+    const args = arguments
+    const context = this
+    if (!inThrottle) {
+      func.apply(context, args)
+      inThrottle = true
+      setTimeout(() => inThrottle = false, limit)
+    }
+  }
+}
+
 // 计算属性
 const currentPhotoIndex = computed(() => {
-  // 确保正确处理数字类型的ID比较
   return props.photos.findIndex(photo => Number(photo.id) === Number(props.currentPhotoId))
 })
 
@@ -141,7 +156,7 @@ const scrollLeft = () => {
   const { clientWidth } = galleryContainer.value
   galleryContainer.value.scrollBy({
     left: -clientWidth * 0.8,
-    behavior: 'smooth'
+    behavior: 'auto' // 改为即时滚动
   })
 }
 
@@ -152,72 +167,94 @@ const scrollRight = () => {
   const { clientWidth } = galleryContainer.value
   galleryContainer.value.scrollBy({
     left: clientWidth * 0.8,
-    behavior: 'smooth'
+    behavior: 'auto' // 改为即时滚动
   })
 }
 
-// 自动滚动到当前照片
+// 优化后的滚动到当前照片函数
 const scrollToCurrentPhoto = async () => {
-  await nextTick()
-  
   if (!galleryContainer.value || currentPhotoIndex.value === -1) return
   
-  // 使用更可靠的选择器，通过ID属性查找
-  const thumbnail = galleryContainer.value.querySelector(`[data-photo-id="${props.currentPhotoId}"]`)
+  // 尝试从缓存获取DOM元素
+  let thumbnail = cachedThumbnails.value.get(props.currentPhotoId)
+  
   if (!thumbnail) {
-    // 回退到nth-child选择器
+    // 缓存未命中，查询DOM并缓存
+    thumbnail = galleryContainer.value.querySelector(`[data-photo-id="${props.currentPhotoId}"]`)
+    if (thumbnail) {
+      cachedThumbnails.value.set(props.currentPhotoId, thumbnail)
+    }
+  }
+  
+  if (!thumbnail) {
+    // 回退方案，但不使用smooth滚动
     const fallbackThumbnail = galleryContainer.value.querySelector(`.thumbnail-item:nth-child(${currentPhotoIndex.value + 1})`)
     if (fallbackThumbnail) {
       const { left, width } = fallbackThumbnail.getBoundingClientRect()
       const containerLeft = galleryContainer.value.getBoundingClientRect().left
       const containerWidth = galleryContainer.value.clientWidth
       
-      // 计算目标滚动位置，使当前照片居中
+      // 计算目标滚动位置
       const targetScroll = galleryContainer.value.scrollLeft + (left - containerLeft) - (containerWidth - width) / 2
       
-      galleryContainer.value.scrollTo({
-        left: targetScroll,
-        behavior: 'smooth'
-      })
+      // 直接设置滚动位置，避免动画
+      galleryContainer.value.scrollLeft = targetScroll
     }
     return
   }
   
-  const { left, width } = thumbnail.getBoundingClientRect()
+  // 优化版本：计算是否需要滚动（只有当当前照片不在可视区域中心时才滚动）
+  const { left, right, width } = thumbnail.getBoundingClientRect()
   const containerLeft = galleryContainer.value.getBoundingClientRect().left
-  const containerWidth = galleryContainer.value.clientWidth
+  const containerRight = galleryContainer.value.getBoundingClientRect().right
+  const containerCenter = containerLeft + (containerRight - containerLeft) / 2
+  const thumbnailCenter = left + width / 2
   
-  // 计算目标滚动位置，使当前照片居中
-  const targetScroll = galleryContainer.value.scrollLeft + (left - containerLeft) - (containerWidth - width) / 2
+  // 如果缩略图已经在可视区域中心附近，不需要滚动
+  if (Math.abs(thumbnailCenter - containerCenter) < width * 0.5) {
+    return
+  }
   
-  galleryContainer.value.scrollTo({
-    left: targetScroll,
-    behavior: 'smooth'
-  })
+  // 计算目标滚动位置
+  const targetScroll = galleryContainer.value.scrollLeft + (left - containerLeft) - (containerRight - containerLeft - width) / 2
+  
+  // 直接设置滚动位置，避免动画
+  galleryContainer.value.scrollLeft = targetScroll
 }
 
-// 监听当前照片变化
+// 使用节流函数包装滚动函数
+const throttledScrollToCurrentPhoto = throttle(scrollToCurrentPhoto, 100)
+
+// 监听当前照片变化 - 移除深度监听
 watch(() => props.currentPhotoId, () => {
-  scrollToCurrentPhoto()
+  throttledScrollToCurrentPhoto()
 })
 
-// 监听照片列表变化
-watch(() => props.photos, () => {
-  scrollToCurrentPhoto()
-}, { deep: true })
+// 监听照片列表变化 - 不使用深度监听
+watch(() => props.photos.length, () => {
+  // 清空缓存，因为列表可能已更改
+  cachedThumbnails.value.clear()
+  nextTick(() => {
+    throttledScrollToCurrentPhoto()
+  })
+})
 
 // 组件挂载
 onMounted(() => {
   handleScroll()
-  scrollToCurrentPhoto()
+  // 初始加载时不使用节流
+  nextTick(() => {
+    scrollToCurrentPhoto()
+  })
   
   // 添加窗口大小变化监听
-  window.addEventListener('resize', handleScroll)
+  window.addEventListener('resize', throttledScrollToCurrentPhoto)
 })
 
 // 组件卸载前清理
 onBeforeUnmount(() => {
-  window.removeEventListener('resize', handleScroll)
+  window.removeEventListener('resize', throttledScrollToCurrentPhoto)
+  cachedThumbnails.value.clear()
 })
 </script>
 
@@ -236,7 +273,8 @@ onBeforeUnmount(() => {
   flex: 1;
   overflow-x: auto;
   overflow-y: hidden;
-  scroll-behavior: smooth;
+  /* 移除平滑滚动，使用JavaScript控制 */
+  scroll-behavior: auto;
   scrollbar-width: none; /* Firefox */
   -ms-overflow-style: none; /* IE/Edge */
   touch-action: pan-x;
@@ -259,18 +297,19 @@ onBeforeUnmount(() => {
 .thumbnail-item {
   flex: 0 0 auto;
   width: 100px;
-  height: 100px; /* 设置固定高度，不再依赖内容高度 */
+  height: 100px;
   margin: 10px 0;
   position: relative;
   cursor: pointer;
-  transition: all 0.3s ease;
+  /* 减少过渡效果，提高性能 */
+  transition: border-color 0.2s ease;
   border-radius: 6px;
   overflow: hidden;
-  border: 2px solid var(--border-color); /* 使用主题变量 */
-  background-color: var(--bg-secondary); /* 使用主题变量 */
+  border: 2px solid var(--border-color);
+  background-color: var(--bg-secondary);
 }
 
-/* 加载动画 - 仅在图片未加载时显示 */
+/* 简化加载动画，减少性能开销 */
 .thumbnail-item:not(.loaded)::before {
   content: '';
   position: absolute;
@@ -289,43 +328,42 @@ onBeforeUnmount(() => {
 }
 
 .thumbnail-item:hover {
-  transform: translateY(-4px);
+  /* 移除translateY效果，仅保留边框和阴影变化 */
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
   border-color: var(--primary-color);
 }
 
 .thumbnail-item.active {
-  border-color: var(--primary-color); /* 使用主题变量 */
-  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3); /* 调整阴影以配合更细的边框 */
-  transform: translateY(-4px);
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 2px rgba(64, 158, 255, 0.3);
+  /* 移除active状态的translateY效果 */
 }
 
 .thumbnail-item img {
   width: 100%;
   height: 100%;
   object-fit: cover;
-  transition: transform 0.3s ease;
-  display: block; /* 确保图片占满容器 */
+  /* 移除过渡效果以提高性能 */
+  display: block;
 }
 
-.thumbnail-item:hover img {
-  transform: scale(1.05);
-}
+/* 移除图片hover时的缩放效果，减少性能开销 */
 
 .photo-title {
   position: absolute;
   bottom: 0;
   left: 0;
   right: 0;
-  padding: 4px 6px; /* 减少内边距，避免占用过多空间 */
+  padding: 4px 6px;
   background: linear-gradient(transparent, rgba(0, 0, 0, 0.9));
-  color: var(--text-primary); /* 使用主题变量 */
-  font-size: 10px; /* 减小字体大小 */
+  color: var(--text-primary);
+  font-size: 10px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   transform: translateY(100%);
-  transition: transform 0.3s ease, opacity 0.3s ease;
+  /* 减少过渡时间 */
+  transition: transform 0.2s ease, opacity 0.2s ease;
   opacity: 0;
 }
 
