@@ -28,23 +28,23 @@
                 <div class="loading-spinner"></div>
                 <span class="loading-text">正在加载高质量图片...</span>
               </div>
-              <!-- 模糊的低质量预览图 - 确保始终显示，不依赖于lowQualityImageUrl的加载时机 -->
+              <!-- 缩略图预览 - 先显示，快速加载 -->
               <img 
-                v-if="currentPhoto.thumbnail || lowQualityImageUrl" 
-                :src="lowQualityImageUrl || currentPhoto.thumbnail" 
+                v-if="currentPhoto.thumbnail" 
+                :src="currentPhoto.thumbnail" 
                 :alt="currentPhoto.title + ' (预览)'" 
                 class="blur-preview"
                 loading="eager"
               />
-              <!-- 移除过渡背景层，避免切换闪烁 -->
               
-              <!-- 高质量原图 -->
+              <!-- 高质量原图 - 点击后加载 -->
               <img 
                 ref="mainImage" 
                 :src="currentPhoto.original" 
                 :alt="currentPhoto.title" 
                 class="main-photo"
                 :style="imageStyle"
+                loading="lazy"
                 @load="handleImageLoad"
                 @error="handleImageError"
               />
@@ -388,14 +388,10 @@ const formatDate = (dateString) => {
   }).format(date)
 }
 
-// 图片处理函数
+// 图片处理函数（已优化，直接使用thumbnail）
 const loadLowQualityPreview = (highQualityUrl) => {
-  // 生成低质量预览URL（实际项目中可能需要服务端支持）
-  // 这里简单地添加一个查询参数来模拟
-  const lowQualityUrl = highQualityUrl?.replace('original', 'small') || ''
-  
-  // 立即设置，确保不会有延迟，优先使用currentPhoto.value?.thumbnail
-  lowQualityImageUrl.value = currentPhoto.value?.thumbnail || lowQualityUrl || ''
+  // 直接使用照片的thumbnail作为预览图
+  lowQualityImageUrl.value = currentPhoto.value?.thumbnail || ''
 }
 
 // 处理图片加载完成

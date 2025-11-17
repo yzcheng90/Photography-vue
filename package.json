@@ -12,6 +12,7 @@
     "@aws-sdk/client-s3": "^3.932.0",
     "aws-sdk": "^2.1692.0",
     "axios": "^1.7.9",
+    "cos-js-sdk-v5": "^1.10.1",
     "crypto-browserify": "^3.12.1",
     "element-plus": "^2.8.6",
     "exifr": "^7.1.3",

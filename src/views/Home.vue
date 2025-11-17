@@ -53,6 +53,7 @@
         class="photo-gallery"
       />
     </div>
+  
     
     <!-- 返回顶部按钮 -->
     <button 
@@ -630,6 +631,22 @@ onUnmounted(() => {
   background-color: rgba(0, 0, 0, 0.9);
   transform: translateY(-3px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+}
+
+.diagnostic-link {
+  display: inline-block;
+  margin-top: 15px;
+  padding: 10px 20px;
+  background-color: #3498db;
+  color: white !important;
+  text-decoration: none;
+  border-radius: 4px;
+  font-weight: bold;
+  transition: background-color 0.3s;
+}
+
+.diagnostic-link:hover {
+  background-color: #2980b9;
 }
 
 /* 过渡动画 */

@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { fetchPhotoList, fetchPhotoDetail, generatePublicUrl } from '../services/photoApi'
+import { fetchPhotoList, fetchPhotoDetail } from '../services/photoApiCos'
+// import { fetchPhotoList, fetchPhotoDetail } from '../services/photoApi'
+import exifr from 'exifr'
 
 export const usePhotoStore = defineStore('photo', {
   state: () => ({
@@ -10,7 +12,10 @@ export const usePhotoStore = defineStore('photo', {
     error: null,
     page: 1,
     pageSize: 20,
-    hasMore: true
+    hasMore: true,
+    // 图片加载缓存，避免重复下载
+    _imageCache: new Map(),
+    _exifCache: new Map()
   }),
   
   getters: {
@@ -20,29 +25,62 @@ export const usePhotoStore = defineStore('photo', {
   },
   
   actions: {
-    // 获取文件大小
+    
+    // 确保照片对象存在基础EXIF占位数据
+    _ensurePhotoExifStub(photo) {
+      if (!photo || photo.exif) return
+      const imageUrl =
+        photo.original ||
+        photo.originalUrl ||
+        photo.thumbnail ||
+        photo.thumbnailUrl ||
+        photo.fileName ||
+        photo.key ||
+        'unknown.jpg'
+      photo.exif = this.getBasicExifData(imageUrl)
+    },
+    
+    // 格式化文件大小
+    _formatFileSize(sizeInBytes) {
+      if (!sizeInBytes || sizeInBytes === 0) return '-'
+      if (sizeInBytes < 1024) {
+        return `${sizeInBytes} B`
+      } else if (sizeInBytes < 1024 * 1024) {
+        return `${(sizeInBytes / 1024).toFixed(2)} KB`
+      } else {
+        return `${(sizeInBytes / (1024 * 1024)).toFixed(2)} MB`
+      }
+    },
+    
+    // 获取文件大小（使用缓存）
     async getFileSize(url) {
+      // 检查缓存
+      if (this._imageCache.has(url)) {
+        const cached = this._imageCache.get(url)
+        if (cached && cached.size) {
+          return this._formatFileSize(cached.size)
+        }
+      }
+      
       try {
         const response = await fetch(url, {
           method: 'HEAD',
-          cache: 'no-store'
+          cache: 'default' // 使用缓存
         })
         
         if (response.ok) {
           const contentLength = response.headers.get('content-length')
           if (contentLength) {
             const sizeInBytes = parseInt(contentLength)
-            if (sizeInBytes < 1024) {
-              return `${sizeInBytes} B`
-            } else if (sizeInBytes < 1024 * 1024) {
-              return `${(sizeInBytes / 1024).toFixed(2)} KB`
-            } else {
-              return `${(sizeInBytes / (1024 * 1024)).toFixed(2)} MB`
-            }
+            // 更新缓存
+            const cached = this._imageCache.get(url) || {}
+            cached.size = sizeInBytes
+            this._imageCache.set(url, cached)
+            return this._formatFileSize(sizeInBytes)
           }
         }
       } catch (error) {
-        console.error(`获取文件大小失败 (${url}):`, error)
+        // 静默失败
       }
       return '-'
     },
@@ -65,112 +103,133 @@ export const usePhotoStore = defineStore('photo', {
       }
     },
     
-    // 获取图片EXIF信息
-    async getExifForUrl(imageUrl) {
-      try {
-        const format = this.getImageFormat(imageUrl)
-        console.log(`尝试解析图片EXIF (格式: ${format}): ${imageUrl}`)
+    // 一次性获取图片的所有信息（尺寸、EXIF、文件大小），避免重复下载
+    async _loadImageData(imageUrl) {
+      // 检查缓存
+      if (this._imageCache.has(imageUrl)) {
+        return this._imageCache.get(imageUrl)
+      }
+      
+      return new Promise((resolve) => {
+        const img = new Image()
+        img.crossOrigin = 'Anonymous'
         
-        // 根据不同格式采用不同的解析策略
-        if (format === 'webp') {
-          // WebP格式特殊处理
-          console.log('WebP格式检测到，使用简化的解析策略')
-          // 对于WebP，我们只获取基本信息（尺寸、文件大小），因为EXIF支持有限
-          try {
-            // 尝试获取尺寸
-            let dimensions = null
-            try {
-              dimensions = await this.getImageDimensions(imageUrl)
-            } catch (e) {
-              console.error('获取WebP图片尺寸失败:', e)
-            }
-            
-            // 尝试获取文件大小
-            let fileSize = '-'  
-            try {
-              fileSize = await this.getFileSize(imageUrl)
-            } catch (e) {
-              console.error('获取WebP文件大小失败:', e)
-            }
-            
-            // 返回基本信息，标记为WebP格式
-            const basicData = this.getBasicExifData(imageUrl)
-            return {
-              ...basicData,
-              fileSize: fileSize || '-',
-              width: dimensions?.width || '-',
-              height: dimensions?.height || '-',
-              pixelCount: (dimensions?.width && dimensions?.height)
-                ? `${((dimensions.width * dimensions.height) / 1000000).toFixed(2)} MP`
-                : '-',
-              format: 'webp'
-            }
-          } catch (error) {
-            console.error('WebP基本信息获取失败:', error)
-            return this.getBasicExifData(imageUrl)
+        // 设置超时
+        const timeout = setTimeout(() => {
+          resolve({
+            dimensions: { width: 1200, height: 800 },
+            size: null,
+            loaded: false
+          })
+        }, 5000)
+        
+        img.onload = () => {
+          clearTimeout(timeout)
+          const data = {
+            dimensions: { width: img.width, height: img.height },
+            size: null, // 文件大小需要单独获取
+            loaded: true
           }
-        } else if (['jpeg', 'tiff'].includes(format)) {
-          // 对于JPEG和TIFF，尝试使用exifr解析完整EXIF数据
-          try {
-            // 使用exifr解析JPEG/TIFF的EXIF数据
-            const exifData = await exifr.parse(imageUrl, {
-              xmp: true,
-              icc: true,
-              tiff: true,
-              ifd1: true,
-              iptc: true,
-              jfif: true,
-              exif: true,
-              gps: true,
-              translateValues: true,
-              mergeOutput: true,
-              chunked: true,
-              maxBufferSize: 10 * 1024 * 1024,
-              timeout: 5000
-            })
-            
-            // 如果解析成功且有有效数据，使用解析的数据
-            if (exifData && Object.keys(exifData).length > 0) {
-              console.log(`成功解析${format.toUpperCase()}的EXIF数据`)
-              // 尝试获取图片尺寸
-              const dimensions = await this.getImageDimensions(imageUrl)
-              // 获取文件大小
-              const fileSize = await this.getFileSize(imageUrl)
-              
-              return this.formatExifData(exifData, dimensions, fileSize, imageUrl)
-            }
-          } catch (exifError) {
-            console.warn(`${format.toUpperCase()} EXIF解析失败: ${exifError.message}`)
-          }
-        } else {
-          // 对于其他格式（如PNG），只获取基本信息
-          console.log(`${format.toUpperCase()}格式，可能不包含完整EXIF信息，使用基本解析策略`)
+          // 缓存结果
+          this._imageCache.set(imageUrl, data)
+          resolve(data)
         }
         
-        console.log('使用基本EXIF数据')
-        return this.getBasicExifData(imageUrl)
-      } catch (error) {
-        console.error(`获取EXIF信息过程中出错 (${imageUrl}):`, error)
+        img.onerror = () => {
+          clearTimeout(timeout)
+          const data = {
+            dimensions: { width: 1200, height: 800 },
+            size: null,
+            loaded: false
+          }
+          this._imageCache.set(imageUrl, data)
+          resolve(data)
+        }
         
-        // 返回基本信息
-        return this.getBasicExifData(imageUrl)
+        img.src = imageUrl
+      })
+    },
+    
+    // 获取图片EXIF信息（优化版，减少重复下载）
+    async getExifForUrl(imageUrl) {
+      // 检查EXIF缓存
+      if (this._exifCache.has(imageUrl)) {
+        return this._exifCache.get(imageUrl)
+      }
+      
+      try {
+        const format = this.getImageFormat(imageUrl)
+        
+        // 对于JPEG和TIFF，尝试使用exifr解析（exifr会下载图片）
+        if (['jpeg', 'tiff'].includes(format)) {
+          try {
+            // exifr.parse 会下载图片，我们同时获取图片数据
+            const [exifData, imageData] = await Promise.allSettled([
+              exifr.parse(imageUrl, {
+                exif: true,
+                gps: true,
+                translateValues: true,
+                mergeOutput: true,
+                chunked: true,
+                maxBufferSize: 3 * 1024 * 1024, // 进一步减少到3MB
+                timeout: 2000 // 减少超时时间到2秒
+              }),
+              this._loadImageData(imageUrl) // 同时加载图片获取尺寸
+            ]).then(results => [
+              results[0].status === 'fulfilled' ? results[0].value : null,
+              results[1].status === 'fulfilled' ? results[1].value : { dimensions: null, size: null }
+            ])
+            
+            // 如果EXIF解析成功
+            if (exifData && Object.keys(exifData).length > 0) {
+              // 获取文件大小（使用HEAD请求，不下载完整文件）
+              const fileSize = await this.getFileSize(imageUrl)
+              
+              const formatted = this.formatExifData(
+                exifData,
+                imageData.dimensions,
+                fileSize,
+                imageUrl
+              )
+              
+              // 缓存结果
+              this._exifCache.set(imageUrl, formatted)
+              return formatted
+            }
+          } catch (exifError) {
+            // 静默失败
+          }
+        }
+        
+        // 对于其他格式或EXIF解析失败，只获取基本尺寸信息
+        const imageData = await this._loadImageData(imageUrl)
+        const fileSize = await this.getFileSize(imageUrl)
+        
+        const basicData = this.getBasicExifData(imageUrl)
+        const result = {
+          ...basicData,
+          fileSize: fileSize || '-',
+          width: imageData.dimensions?.width || '-',
+          height: imageData.dimensions?.height || '-',
+          pixelCount: (imageData.dimensions?.width && imageData.dimensions?.height)
+            ? `${((imageData.dimensions.width * imageData.dimensions.height) / 1000000).toFixed(2)} MP`
+            : '-'
+        }
+        
+        // 缓存结果
+        this._exifCache.set(imageUrl, result)
+        return result
+      } catch (error) {
+        const result = this.getBasicExifData(imageUrl)
+        this._exifCache.set(imageUrl, result)
+        return result
       }
     },
     
-    // 获取图片尺寸
+    // 获取图片尺寸（使用缓存）
     async getImageDimensions(imageUrl) {
-      try {
-        return new Promise((resolve, reject) => {
-          const img = new Image()
-          img.onload = () => resolve({ width: img.width, height: img.height })
-          img.onerror = () => reject(new Error('无法获取图片尺寸'))
-          img.src = imageUrl
-          img.crossOrigin = 'anonymous'
-        })
-      } catch (error) {
-        console.error('获取图片尺寸失败:', error)
-        return { width: 1920, height: 1080 } // 默认值作为后备
-      }
+      const imageData = await this._loadImageData(imageUrl)
+      return imageData.dimensions || { width: 1200, height: 800 }
     },
 
     // 格式化EXIF数据
@@ -311,8 +370,14 @@ export const usePhotoStore = defineStore('photo', {
 
     // 获取基本EXIF数据（解析失败时使用）
     getBasicExifData(imageUrl) {
+      // 确保imageUrl是字符串，避免undefined错误
+      if (!imageUrl || typeof imageUrl !== 'string') {
+        console.warn('getBasicExifData: imageUrl无效', imageUrl);
+        imageUrl = 'unknown.jpg';
+      }
+      
       return {
-        fileName: imageUrl.split('/').pop(),
+        fileName: imageUrl.split('/').pop() || 'unknown.jpg',
         fileSize: '-',
         width: '-',
         height: '-',
@@ -360,92 +425,23 @@ export const usePhotoStore = defineStore('photo', {
       return this.getExifForUrl(imageUrl)
     },
 
-    // 为照片添加EXIF数据（原图+缩略图双重解析策略）
+    // 为照片添加EXIF数据（优化版，只解析一次）
     async enrichPhotoWithExifData(photo) {
       try {
-        // 首先尝试从原图解析EXIF信息
-        let exifData = await this.getExifForUrl(photo.original)
+        // 只从原图解析EXIF信息，避免重复下载
+        const exifData = await this.getExifForUrl(photo.original || photo.originalUrl)
         
-        // 如果原图解析失败或信息不完整，尝试从缩略图解析
-        const hasBasicInfo = exifData && 
-          (exifData.width !== '-' || 
-           exifData.height !== '-' || 
-           exifData.camera !== '-')
-        
-        if (!hasBasicInfo && photo.thumbnail !== photo.original) {
-          console.log(`原图EXIF信息不完整，尝试从缩略图解析: ${photo.thumbnail}`)
-          const thumbnailExif = await this.getExifForUrl(photo.thumbnail)
-          
-          // 合并缩略图的信息到原图数据中
-          if (thumbnailExif) {
-            exifData = {
-              ...exifData,
-              ...thumbnailExif,
-              fileName: photo.original.split('/').pop(), // 保留原图文件名
-              fileSize: exifData?.fileSize !== '-' ? exifData.fileSize : thumbnailExif?.fileSize // 优先使用原图文件大小
-            }
-          }
+        // 确保返回有效的EXIF数据
+        if (exifData && Object.keys(exifData).length > 0) {
+          return exifData
         }
         
-        // 确保返回有效的EXIF数据，即使所有解析都失败
-        if (!exifData || Object.keys(exifData).length === 0) {
-          console.log(`所有EXIF解析都失败，使用基本数据结构`)
-          // 获取图片尺寸信息
-          let dimensions = null
-          try {
-            dimensions = await this.getImageDimensions(photo.original)
-          } catch (e) {
-            console.error('获取图片尺寸失败:', e)
-          }
-          
-          // 获取文件大小信息
-          let fileSize = '-'  
-          try {
-            fileSize = await this.getFileSize(photo.original)
-          } catch (e) {
-            console.error('获取文件大小失败:', e)
-          }
-          
-          // 返回基本EXIF数据结构
-          return this.formatExifData(null, dimensions, fileSize, photo.original)
-        }
-        
-        return exifData
+        // 如果解析失败，返回基本数据
+        return this.getBasicExifData(photo.original || photo.originalUrl || photo.fileName || 'unknown.jpg')
       } catch (error) {
-        console.error(`解析EXIF数据时出错:`, error)
         // 出错时返回基本EXIF数据结构
-        return this.getBasicExifData(photo.original)
+        return this.getBasicExifData(photo.original || photo.originalUrl || photo.fileName || 'unknown.jpg')
       }
-    },
-
-    // 获取图片尺寸信息
-    async getImageDimensions(imageUrl) {
-      return new Promise((resolve) => {
-        try {
-          const img = new Image()
-          img.crossOrigin = 'Anonymous' // 尝试解决CORS问题
-          
-          img.onload = () => {
-            console.log(`成功获取图片尺寸: ${imageUrl}, ${img.width}x${img.height}`)
-            resolve({
-              width: img.width,
-              height: img.height
-            })
-          }
-          
-          img.onerror = () => {
-            console.error(`无法加载图片获取尺寸: ${imageUrl}`)
-            // 出错时返回合理的默认值
-            resolve({ width: 1200, height: 800 })
-          }
-          
-          img.src = imageUrl + '?' + new Date().getTime() // 添加时间戳避免缓存
-        } catch (error) {
-          console.error('获取图片尺寸失败:', error)
-          // 捕获异常时返回默认值
-          resolve({ width: 1200, height: 800 })
-        }
-      })
     },
     // 从EXIF数据中提取坐标信息
     getCoordinatesFromExif(exifData) {
@@ -610,13 +606,14 @@ export const usePhotoStore = defineStore('photo', {
         this.loading = true
         this.error = null
         
-        // 从S3获取照片列表
+        // 从COS获取照片列表
         const photoList = await fetchPhotoList()
         
-        console.log(`Store收到${photoList.length}张照片`)
-        
-        // 直接使用API返回的数据格式
-        this.photos = photoList
+        // 直接使用API返回的数据格式，并为每张照片准备基础EXIF占位
+        this.photos = photoList.map(photo => {
+          this._ensurePhotoExifStub(photo)
+          return photo
+        })
         
         // 设置为没有更多照片（简化模式）
         this.hasMore = false
@@ -636,22 +633,26 @@ export const usePhotoStore = defineStore('photo', {
     
     // 设置当前照片
     setCurrentPhoto(photo) {
-      // 确保currentPhoto和photos数组中的照片对象是同一个引用
-      // 首先检查photos数组中是否已存在该照片
-      const existingIndex = this.photos.findIndex(p => p.id === photo.id)
+      // 支持传入照片ID（数字）或照片对象
+      let targetPhoto = null
       
-      if (existingIndex !== -1) {
-        // 如果存在，使用数组中的引用，确保数据同步
-        this.currentPhoto = this.photos[existingIndex]
-      } else {
-        // 如果不存在，直接使用传入的照片对象
-        this.currentPhoto = photo
-        // 并确保currentPhoto对象有exif属性，使用基本数据结构
-        if (!this.currentPhoto.exif) {
-          this.currentPhoto.exif = this.getBasicExifData(photo.original)
+      if (typeof photo === 'number' || typeof photo === 'string') {
+        targetPhoto = this.photos.find(p => p.id === parseInt(photo))
+        if (!targetPhoto) {
+          console.warn(`未找到ID为 ${photo} 的照片`)
+          return
         }
-    }
-  },
+      } else if (photo && typeof photo === 'object') {
+        const existingIndex = this.photos.findIndex(p => p.id === photo.id)
+        targetPhoto = existingIndex !== -1 ? this.photos[existingIndex] : photo
+      } else {
+        console.warn('setCurrentPhoto: 无效的参数类型', photo)
+        return
+      }
+      
+      this._ensurePhotoExifStub(targetPhoto)
+      this.currentPhoto = targetPhoto
+    },
     
     /**
      * 获取照片详情
@@ -670,8 +671,24 @@ export const usePhotoStore = defineStore('photo', {
           photo = await fetchPhotoDetail(id)
         }
         
-        // 简化版本：直接使用照片数据
+        // 先设置基本EXIF数据，确保UI能立即显示
+        this._ensurePhotoExifStub(photo)
+        
+        // 设置当前照片（先显示照片）
         this.currentPhoto = photo
+        
+        // 异步加载完整EXIF数据，不阻塞UI
+        // 使用requestIdleCallback或setTimeout延迟加载
+        if (typeof requestIdleCallback !== 'undefined') {
+          requestIdleCallback(async () => {
+            await this._loadExifDataAsync(photo)
+          }, { timeout: 2000 })
+        } else {
+          // 降级到setTimeout
+          setTimeout(async () => {
+            await this._loadExifDataAsync(photo)
+          }, 300)
+        }
         
       } catch (error) {
         console.error(`获取照片${id}详情失败:`, error)
@@ -679,6 +696,29 @@ export const usePhotoStore = defineStore('photo', {
         this.currentPhoto = null
       } finally {
         this.detailLoading = false
+      }
+    },
+    
+    // 异步加载EXIF数据（内部方法）
+    async _loadExifDataAsync(photo) {
+      // 检查是否还需要加载（可能用户已经切换了照片）
+      if (!this.currentPhoto || this.currentPhoto.id !== photo.id) {
+        return
+      }
+      
+      // 如果已经有完整的EXIF数据，跳过
+      if (photo.exif && photo.exif.camera !== '-' && photo.exif.width !== '-') {
+        return
+      }
+      
+      try {
+        const exifData = await this.enrichPhotoWithExifData(photo)
+        // 再次检查当前照片是否还是这个
+        if (this.currentPhoto && this.currentPhoto.id === photo.id) {
+          this.currentPhoto.exif = exifData
+        }
+      } catch (error) {
+        // 静默失败，保持基本EXIF数据
       }
     },
     
