@@ -13,8 +13,8 @@ const ENDPOINT = `https://${BUCKET_DOMAIN}`
 const PHOTO_DIR = ''
 const MAX_KEYS = 1000
 // 用户提供的实际访问密钥
-const ACCESS_KEY = 'AKIDVwCF8oHWXLyOaZKsFPPDoIZdXWSF3sY2'
-const SECRET_KEY = 'LPabWL2wfASWN0QddPzNZZMxLVSDl5B4'
+const ACCESS_KEY = 'AKIDVwCF8oHWXxxxxxaoIZdXWSF3sY2'
+const SECRET_KEY = 'LPabWL2wxxxxxxxZMxLVSDl5B4'
 /* ===================== */
 
 // 缓存已获取的照片列表
